@@ -49,6 +49,7 @@ Todos os comandos são usados no chat privado do bot. Chats podem ser IDs numér
 | `/rotina_editar id|nome|chat_origem|topico_origem_ou_-|chat_destino|topico_destino_ou_-|intervalo_segundos` | Editar uma rotina; alterar a origem reinicia seu cursor |
 | `/rotinas` | Listar rotinas |
 | `/rotina id` | Mostrar configuração, checkpoint e próxima execução |
+| `/rotina_cursor id|ultimo_id_de_mensagem` | Definir o último ID verificado; use `0` para recomeçar do histórico. Não funciona durante uma execução |
 | `/rotina_ativar id` | Ativar; a primeira execução é iniciada imediatamente |
 | `/rotina_pausar id` | Pausar execuções futuras |
 | `/rotina_executar id` | Disparar manualmente, mesmo que a rotina esteja pausada |
@@ -61,11 +62,12 @@ Exemplo:
 
 ```text
 /rotina_criar novidades|-1001234567890|456|-1009876543210|-|300
+/rotina_cursor 1|5000
 /rotina_ativar 1
 /rotina_executar 1
 ```
 
-O exemplo lê o tópico `456` da origem, copia para o chat de destino sem escolher tópico e agenda a rotina a cada 300 segundos.
+O exemplo lê o tópico `456` da origem, copia para o chat de destino sem escolher tópico e agenda a rotina a cada 300 segundos. O comando de cursor faz a próxima execução buscar mensagens com ID maior que `5000`; use `0` para voltar ao início do histórico acessível.
 
 ## Implantação no Railway
 

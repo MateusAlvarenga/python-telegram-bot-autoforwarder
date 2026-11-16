@@ -53,6 +53,19 @@ def parse_routine_spec(value: str) -> tuple[str, str, int | None, str, int | Non
     )
 
 
+def parse_cursor_spec(value: str) -> tuple[int, int]:
+    fields = [field.strip() for field in value.split(_SPEC_SEPARATOR)]
+    if len(fields) != 2:
+        raise ValueError("Use: id_da_rotina|ultimo_id_de_mensagem")
+    try:
+        routine_id, cursor = (int(field) for field in fields)
+    except ValueError as exc:
+        raise ValueError("O ID da rotina deve ser positivo e o cursor não negativo.") from exc
+    if routine_id <= 0 or not 0 <= cursor <= 9_223_372_036_854_775_807:
+        raise ValueError("O ID da rotina deve ser positivo e o cursor não negativo.")
+    return routine_id, cursor
+
+
 def _services(context: ContextTypes.DEFAULT_TYPE) -> tuple[BotConfig, Database, RoutineScheduler]:
     return (
         context.application.bot_data["config"],
@@ -92,6 +105,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/rotina_editar id|nome|chat_origem|topico_origem_ou_-|chat_destino|topico_destino_ou_-|intervalo_segundos\n"
         "/rotinas - listar rotinas\n"
         "/rotina id - ver configuração e último checkpoint\n"
+        "/rotina_cursor id|ultimo_id_de_mensagem - definir manualmente o cursor\n"
         "/rotina_ativar id - ativar execução periódica (a primeira é imediata)\n"
         "/rotina_pausar id - pausar futuras execuções\n"
         "/rotina_executar id - disparar uma execução manual\n"
@@ -183,6 +197,27 @@ async def show_routine(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         f"Última mensagem verificada: {routine['last_message_id']}\n"
         f"Última execução: {_format_time(routine['last_run_at'])}\n"
         f"Próxima execução: {_format_time(routine['next_run_at'])}"
+    )
+
+
+async def set_routine_cursor(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _owner_only(update, context):
+        return
+    try:
+        routine_id, cursor = parse_cursor_spec(" ".join(context.args))
+    except ValueError as exc:
+        await update.effective_message.reply_text(str(exc))
+        return
+    _, database, _ = _services(context)
+    routine = await database.set_routine_cursor(routine_id, cursor)
+    if routine is None:
+        await update.effective_message.reply_text(
+            "Rotina não encontrada ou em execução; o cursor não foi alterado."
+        )
+        return
+    await update.effective_message.reply_text(
+        f"Cursor da rotina {routine_id} definido para {cursor}. "
+        f"A próxima execução buscará mensagens com ID maior que {cursor}."
     )
 
 

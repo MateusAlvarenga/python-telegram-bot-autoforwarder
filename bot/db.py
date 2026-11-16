@@ -193,6 +193,27 @@ class Database:
             )
         return dict(row) if row is not None else None
 
+    async def set_routine_cursor(
+        self,
+        routine_id: int,
+        last_message_id: int,
+    ) -> dict[str, Any] | None:
+        pool = self._require_pool()
+        async with pool.acquire() as connection:
+            row = await connection.fetchrow(
+                """
+                UPDATE routines
+                SET last_message_id = $2,
+                    updated_at = NOW()
+                WHERE id = $1
+                  AND (lease_token IS NULL OR lease_expires_at < NOW())
+                RETURNING *
+                """,
+                routine_id,
+                last_message_id,
+            )
+        return dict(row) if row is not None else None
+
     async def get_due_routines(self) -> list[dict[str, Any]]:
         pool = self._require_pool()
         async with pool.acquire() as connection:

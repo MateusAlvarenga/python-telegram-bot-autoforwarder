@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 
 from bot.config import BotConfig
 from bot.db import normalize_database_url
-from bot.handlers import parse_routine_spec
+from bot.handlers import parse_cursor_spec, parse_routine_spec
 from bot.main import build_application
 from bot.routines import RoutineScheduler, message_belongs_to_topic
 
@@ -31,7 +31,7 @@ class ConfigurationTests(unittest.TestCase):
             )
         )
 
-        self.assertEqual(len(application.handlers[0]), 12)
+        self.assertEqual(len(application.handlers[0]), 13)
 
 
 class RoutineSpecTests(unittest.TestCase):
@@ -49,6 +49,17 @@ class RoutineSpecTests(unittest.TestCase):
         ):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 parse_routine_spec(value)
+
+
+class CursorSpecTests(unittest.TestCase):
+    def test_parses_routine_id_and_non_negative_cursor(self) -> None:
+        self.assertEqual(parse_cursor_spec("7|0"), (7, 0))
+        self.assertEqual(parse_cursor_spec("7 | 12345"), (7, 12345))
+
+    def test_rejects_invalid_routine_ids_and_cursors(self) -> None:
+        for value in ("0|1", "1|-1", "1|9223372036854775808", "one|2", "1"):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                parse_cursor_spec(value)
 
 
 class TopicFilterTests(unittest.TestCase):

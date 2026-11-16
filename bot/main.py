@@ -21,6 +21,7 @@ from bot.handlers import (
     pause_routine,
     show_history,
     show_routine,
+    set_routine_cursor,
     start,
     stop_routine,
 )
@@ -71,6 +72,7 @@ async def _post_init(application: Application) -> None:
                 BotCommand("rotina", "Ver uma rotina"),
                 BotCommand("rotina_criar", "Criar rotina"),
                 BotCommand("rotina_editar", "Editar rotina"),
+                BotCommand("rotina_cursor", "Definir cursor da rotina"),
                 BotCommand("rotina_ativar", "Ativar rotina"),
                 BotCommand("rotina_pausar", "Pausar rotina"),
                 BotCommand("rotina_executar", "Executar agora"),
@@ -130,6 +132,7 @@ def build_application(config: BotConfig) -> Application:
         ("rotina", show_routine),
         ("rotina_criar", create_routine),
         ("rotina_editar", edit_routine),
+        ("rotina_cursor", set_routine_cursor),
         ("rotina_ativar", enable_routine),
         ("rotina_pausar", pause_routine),
         ("rotina_executar", execute_routine),
