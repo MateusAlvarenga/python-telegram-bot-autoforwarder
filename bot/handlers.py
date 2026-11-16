@@ -99,6 +99,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _owner_only(update, context):
         return
+    
+    date_and_time = datetime.now(timezone(timedelta(hours=-3))).strftime("%Y-%m-%d %H:%M:%S")
     await update.effective_message.reply_text(
         "Comandos:\n"
         "/rotina_criar nome|chat_origem|topico_origem_ou_-|chat_destino|topico_destino_ou_-|intervalo_segundos\n"
@@ -113,6 +115,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/rotina_excluir id - excluir uma rotina parada\n"
         "/historico id - últimas execuções\n\n"
         "Chats podem ser IDs numéricos ou @username. Use '-' para não selecionar tópico."
+        f"\n\nData e hora: {date_and_time}" 
     )
 
 
@@ -197,6 +200,7 @@ async def show_routine(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         f"Última mensagem verificada: {routine['last_message_id']}\n"
         f"Última execução: {_format_time(routine['last_run_at'])}\n"
         f"Próxima execução: {_format_time(routine['next_run_at'])}"
+        f"Data e hora atual: {datetime.now(timezone(timedelta(hours=-3))).strftime('%Y-%m-%d %H:%M:%S')}"
     )
 
 
