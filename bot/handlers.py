@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from telegram import Update
@@ -313,7 +313,7 @@ async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
     lines = [
         f"#{run['id']} · {run['status']} · "
-        f"{_format_time(run['started_at'])} · {run['messages_copied']} mensagens"
+        f"{_format_time(_time_zone(run['started_at']))} · {run['messages_copied']} mensagens"
         + (f" · {' '.join(run['error'].split())[:180]}" if run["error"] else "")
         for run in runs
     ]
@@ -339,3 +339,9 @@ def _format_time(value: datetime | None) -> str:
     if value is None:
         return "—"
     return value.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+
+# return a datetime object in brazilia timezone
+def _time_zone(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    return value.astimezone(timezone(timedelta(hours=-3)))
