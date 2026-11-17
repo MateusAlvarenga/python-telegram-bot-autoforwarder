@@ -33,6 +33,9 @@ class Database:
                     destination_topic_id BIGINT,
                     interval_seconds INTEGER NOT NULL CHECK (interval_seconds > 0),
                     last_message_id BIGINT NOT NULL DEFAULT 0,
+                    max_posts_per_run BIGINT CHECK (
+                        max_posts_per_run IS NULL OR max_posts_per_run > 0
+                    ),
                     enabled BOOLEAN NOT NULL DEFAULT FALSE,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -41,6 +44,11 @@ class Database:
                     lease_token UUID,
                     lease_expires_at TIMESTAMPTZ
                 )
+                """,
+                """
+                ALTER TABLE routines
+                    ADD COLUMN IF NOT EXISTS max_posts_per_run BIGINT
+                    CHECK (max_posts_per_run IS NULL OR max_posts_per_run > 0)
                 """,
                 """
                 CREATE INDEX IF NOT EXISTS routines_due_idx
@@ -97,6 +105,8 @@ class Database:
         destination_chat_id: str,
         destination_topic_id: int | None,
         interval_seconds: int,
+        last_message_id: int = 0,
+        max_posts_per_run: int | None = None,
     ) -> dict[str, Any]:
         pool = self._require_pool()
         async with pool.acquire() as connection:
@@ -104,9 +114,10 @@ class Database:
                 """
                 INSERT INTO routines (
                     name, source_chat_id, source_topic_id, destination_chat_id,
-                    destination_topic_id, interval_seconds
+                    destination_topic_id, interval_seconds, last_message_id,
+                    max_posts_per_run
                 )
-                VALUES ($1, $2, $3, $4, $5, $6)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                 RETURNING *
                 """,
                 name,
@@ -115,6 +126,8 @@ class Database:
                 destination_chat_id,
                 destination_topic_id,
                 interval_seconds,
+                last_message_id,
+                max_posts_per_run,
             )
         return dict(row)
 
@@ -127,6 +140,7 @@ class Database:
         destination_chat_id: str,
         destination_topic_id: int | None,
         interval_seconds: int,
+        max_posts_per_run: int | None = None,
     ) -> dict[str, Any] | None:
         pool = self._require_pool()
         async with pool.acquire() as connection:
@@ -143,6 +157,7 @@ class Database:
                     destination_chat_id = $5,
                     destination_topic_id = $6,
                     interval_seconds = $7,
+                    max_posts_per_run = $8,
                     next_run_at = CASE
                         WHEN enabled THEN NOW() + ($7::double precision * INTERVAL '1 second')
                         ELSE NULL
@@ -159,6 +174,7 @@ class Database:
                 destination_chat_id,
                 destination_topic_id,
                 interval_seconds,
+                max_posts_per_run,
             )
         return dict(row) if row is not None else None
 

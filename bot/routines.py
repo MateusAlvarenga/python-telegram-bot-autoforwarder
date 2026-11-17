@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 _LEASE_SECONDS = 900
 _BATCH_SIZE = 100
+_MAX_ALBUM_SIZE = 10
 _MAX_BATCHES_PER_RUN = 10
 _RETRY_LIMIT = 5
 
@@ -122,6 +123,23 @@ class RoutineScheduler:
         task = self._tasks.get(routine_id)
         return task is not None and not task.done()
 
+    async def latest_source_message_id(
+        self,
+        source_chat_id: str,
+        source_topic_id: int | None,
+    ) -> int:
+        source_chat = await self._source_client.get_entity(_chat_identifier(source_chat_id))
+        latest_message_id = source_topic_id or 0
+        query = {"limit": 1}
+        if source_topic_id is not None:
+            query["reply_to"] = source_topic_id
+
+        async for message in self._source_client.iter_messages(source_chat, **query):
+            message_id = getattr(message, "id", None)
+            if isinstance(message_id, int):
+                latest_message_id = max(latest_message_id, message_id)
+        return latest_message_id
+
     async def _scheduler_loop(self) -> None:
         while not self._shutdown.is_set():
             try:
@@ -188,10 +206,14 @@ class RoutineScheduler:
             _chat_identifier(routine["source_chat_id"])
         )
         cursor = routine["last_message_id"]
+        max_posts_per_run = routine.get("max_posts_per_run")
+        posts_processed = 0
         copied_count = 0
 
         for _ in range(_MAX_BATCHES_PER_RUN):
             if stop_event.is_set():
+                break
+            if max_posts_per_run is not None and posts_processed >= max_posts_per_run:
                 break
             messages = [
                 message
@@ -199,37 +221,84 @@ class RoutineScheduler:
                     source_chat,
                     min_id=cursor,
                     reverse=True,
-                    limit=_BATCH_SIZE,
+                    limit=_BATCH_SIZE + _MAX_ALBUM_SIZE,
                 )
             ]
             if not messages:
                 break
 
-            message_ids = [
-                message.id
-                for message in messages
-                if isinstance(getattr(message, "id", None), int)
-                and (
-                    routine["source_topic_id"] is None
-                    or message_belongs_to_topic(message, routine["source_topic_id"])
+            fetched_count = len(messages)
+            last_grouped_id = getattr(messages[-1], "grouped_id", None)
+            if fetched_count == _BATCH_SIZE + _MAX_ALBUM_SIZE and isinstance(
+                last_grouped_id, int
+            ):
+                first_tail_album_index = next(
+                    index
+                    for index, message in enumerate(messages)
+                    if getattr(message, "grouped_id", None) == last_grouped_id
                 )
-            ]
+                messages = messages[:first_tail_album_index]
+                if not messages:
+                    raise RuntimeError("Could not retrieve a complete Telegram album.")
+
             latest_scanned_id = max(message.id for message in messages)
-            if message_ids:
+            posts_by_key: dict[tuple[str, int], list[int]] = {}
+            for message in messages:
+                message_id = getattr(message, "id", None)
+                if not isinstance(message_id, int):
+                    continue
+                if (
+                    routine["source_topic_id"] is not None
+                    and not message_belongs_to_topic(message, routine["source_topic_id"])
+                ):
+                    continue
+                grouped_id = getattr(message, "grouped_id", None)
+                post_key = (
+                    ("album", grouped_id)
+                    if isinstance(grouped_id, int)
+                    else ("message", message_id)
+                )
+                posts_by_key.setdefault(post_key, []).append(message_id)
+
+            posts = list(posts_by_key.values())
+            selected_posts: list[list[int]] = []
+            selected_message_count = 0
+            for post in posts:
+                if (
+                    max_posts_per_run is not None
+                    and posts_processed + len(selected_posts) >= max_posts_per_run
+                ):
+                    break
+                if selected_message_count + len(post) > _BATCH_SIZE:
+                    break
+                selected_posts.append(post)
+                selected_message_count += len(post)
+
+            if posts and not selected_posts:
+                raise RuntimeError("A source post exceeds Telegram's 100-message copy limit.")
+            if selected_posts:
                 copied_count += await self._copy_batch(
                     routine,
-                    message_ids,
+                    selected_posts,
                     lease_token,
                 )
+                posts_processed += len(selected_posts)
 
-            cursor = latest_scanned_id
+            all_posts_selected = len(selected_posts) == len(posts)
+            cursor = (
+                latest_scanned_id
+                if all_posts_selected
+                else max(message_id for post in selected_posts for message_id in post)
+            )
             await self._database.save_cursor(
                 routine_id,
                 lease_token,
                 cursor,
                 _LEASE_SECONDS,
             )
-            if len(messages) < _BATCH_SIZE:
+            if max_posts_per_run is not None and posts_processed >= max_posts_per_run:
+                break
+            if all_posts_selected and fetched_count < _BATCH_SIZE + _MAX_ALBUM_SIZE:
                 break
 
         return copied_count
@@ -237,12 +306,13 @@ class RoutineScheduler:
     async def _copy_batch(
         self,
         routine: dict[str, Any],
-        message_ids: list[int],
+        message_posts: list[list[int]],
         lease_token: Any,
     ) -> int:
         source_chat_id = _chat_identifier(routine["source_chat_id"])
         destination_chat_id = _chat_identifier(routine["destination_chat_id"])
         destination_topic_id = routine["destination_topic_id"]
+        message_ids = [message_id for post in message_posts for message_id in post]
         try:
             copied_messages = await self._with_rate_limit_retry(
                 self._copier_bot.copy_messages,
@@ -262,29 +332,39 @@ class RoutineScheduler:
             )
 
         copied_count = 0
-        for message_id in message_ids:
+        for post in message_posts:
             try:
-                await self._with_rate_limit_retry(
-                    self._copier_bot.copy_message,
-                    chat_id=destination_chat_id,
-                    from_chat_id=source_chat_id,
-                    message_id=message_id,
-                    message_thread_id=destination_topic_id,
-                )
-                copied_count += 1
+                if len(post) == 1:
+                    await self._with_rate_limit_retry(
+                        self._copier_bot.copy_message,
+                        chat_id=destination_chat_id,
+                        from_chat_id=source_chat_id,
+                        message_id=post[0],
+                        message_thread_id=destination_topic_id,
+                    )
+                    copied_count += 1
+                else:
+                    copied_messages = await self._with_rate_limit_retry(
+                        self._copier_bot.copy_messages,
+                        chat_id=destination_chat_id,
+                        from_chat_id=source_chat_id,
+                        message_ids=post,
+                        message_thread_id=destination_topic_id,
+                    )
+                    copied_count += len(copied_messages)
             except BadRequest as exc:
                 if not _is_unavailable_source_message(exc):
                     raise
                 logger.warning(
-                    "Skipping unavailable source message %s in routine %s: %s",
-                    message_id,
+                    "Skipping unavailable source post %s in routine %s: %s",
+                    post,
                     routine["id"],
                     exc,
                 )
             await self._database.save_cursor(
                 routine["id"],
                 lease_token,
-                message_id,
+                max(post),
                 _LEASE_SECONDS,
             )
         return copied_count

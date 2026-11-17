@@ -7,7 +7,8 @@ Bot privado que mantém rotinas de cópia contínua entre grupos, canais e tópi
 - O bot de controle recebe comandos do proprietário somente no chat privado.
 - Uma sessão de usuário Telethon consulta o histórico da origem. A Bot API não oferece busca de histórico; por isso, a sessão Telethon é necessária para descobrir mensagens novas.
 - A Bot API `copyMessages` copia as mensagens em lotes de até 100, sem adicionar o cabeçalho de encaminhamento. `COPIER_BOT_TOKEN` permite usar outro bot como remetente; se estiver vazio, o próprio `BOT_TOKEN` é usado.
-- Uma rotina nova começa no ID 0, copiando o histórico acessível em ordem cronológica. A cada execução são consultadas até 1.000 mensagens novas; o cursor é salvo após cada lote confirmado e retoma do ponto salvo na próxima execução.
+- Ao criar uma rotina, o cursor começa na mensagem mais recente da origem ou do tópico selecionado; assim, somente mensagens posteriores à criação são copiadas. A cada execução são copiadas até 1.000 mensagens novas; o cursor é salvo após cada lote confirmado e retoma do ponto salvo na próxima execução.
+- Cada rotina pode limitar a quantidade de posts enviados por execução; sem limite é o padrão. Um álbum conta como um post e é copiado como uma unidade. A migração adiciona o limite como `NULL`, então as rotinas já existentes continuam ilimitadas.
 - Execuções automáticas e manuais usam lease persistido no PostgreSQL para impedir que a mesma rotina rode simultaneamente. A próxima execução automática é agendada após o término da atual.
 - Pausar impede execuções futuras. Parar também solicita a interrupção após o lote em andamento. Excluir mantém o histórico.
 - Um timeout depois de o Telegram aceitar uma cópia, mas antes de o serviço receber a resposta, pode causar repetição: a Bot API não oferece chave de idempotência.
@@ -45,8 +46,8 @@ Todos os comandos são usados no chat privado do bot. Chats podem ser IDs numér
 
 | Comando | Descrição |
 | --- | --- |
-| `/rotina_criar nome|chat_origem|topico_origem_ou_-|chat_destino|topico_destino_ou_-|intervalo_segundos` | Criar uma rotina inicialmente pausada |
-| `/rotina_editar id|nome|chat_origem|topico_origem_ou_-|chat_destino|topico_destino_ou_-|intervalo_segundos` | Editar uma rotina; alterar a origem reinicia seu cursor |
+| `/rotina_criar nome|chat_origem|topico_origem_ou_-|chat_destino|topico_destino_ou_-|intervalo_segundos[|limite_de_posts_ou_-]` | Criar uma rotina inicialmente pausada; omitir o limite ou usar `-` deixa ilimitada |
+| `/rotina_editar id|nome|chat_origem|topico_origem_ou_-|chat_destino|topico_destino_ou_-|intervalo_segundos[|limite_de_posts_ou_-]` | Editar uma rotina; alterar a origem reinicia seu cursor |
 | `/rotinas` | Listar rotinas |
 | `/rotina id` | Mostrar configuração, checkpoint e próxima execução |
 | `/rotina_cursor id|ultimo_id_de_mensagem` | Definir o último ID verificado; use `0` para recomeçar do histórico. Não funciona durante uma execução |
@@ -62,6 +63,7 @@ Exemplo:
 
 ```text
 /rotina_criar novidades|-1001234567890|456|-1009876543210|-|300
+/rotina_criar destaques|-1001234567890|-|-1009876543210|-|300|20
 /rotina_cursor 1|5000
 /rotina_ativar 1
 /rotina_executar 1

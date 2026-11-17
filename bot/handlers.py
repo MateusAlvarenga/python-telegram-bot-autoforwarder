@@ -13,13 +13,15 @@ from bot.routines import RoutineScheduler
 _SPEC_SEPARATOR = "|"
 
 
-def parse_routine_spec(value: str) -> tuple[str, str, int | None, str, int | None, int]:
+def parse_routine_spec(
+    value: str,
+) -> tuple[str, str, int | None, str, int | None, int, int | None]:
     fields = [field.strip() for field in value.split(_SPEC_SEPARATOR)]
-    if len(fields) != 6:
+    if len(fields) not in (6, 7):
         raise ValueError(
-            "Use: nome|chat_origem|topico_origem_ou_-|chat_destino|topico_destino_ou_-|intervalo_em_segundos"
+            "Use: nome|chat_origem|topico_origem_ou_-|chat_destino|topico_destino_ou_-|intervalo_em_segundos[|limite_de_posts_ou_-]"
         )
-    name, source_chat, source_topic, destination_chat, destination_topic, interval = fields
+    name, source_chat, source_topic, destination_chat, destination_topic, interval = fields[:6]
     if not name or len(name) > 64:
         raise ValueError("O nome da rotina deve ter entre 1 e 64 caracteres.")
     if not source_chat or not destination_chat:
@@ -43,6 +45,15 @@ def parse_routine_spec(value: str) -> tuple[str, str, int | None, str, int | Non
     if interval_seconds <= 0:
         raise ValueError("O intervalo deve ser um número positivo de segundos.")
 
+    max_posts_per_run = None
+    if len(fields) == 7 and fields[6] != "-":
+        try:
+            max_posts_per_run = int(fields[6])
+        except ValueError as exc:
+            raise ValueError("O limite de posts deve ser um número positivo ou '-'.") from exc
+        if not 0 < max_posts_per_run <= 9_223_372_036_854_775_807:
+            raise ValueError("O limite de posts deve ser um número positivo ou '-'.")
+
     return (
         name,
         source_chat,
@@ -50,6 +61,7 @@ def parse_routine_spec(value: str) -> tuple[str, str, int | None, str, int | Non
         destination_chat,
         parse_topic(destination_topic),
         interval_seconds,
+        max_posts_per_run,
     )
 
 
@@ -103,8 +115,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     date_and_time = datetime.now(timezone(timedelta(hours=-3))).strftime("%Y-%m-%d %H:%M:%S")
     await update.effective_message.reply_text(
         "Comandos:\n"
-        "/rotina_criar nome|chat_origem|topico_origem_ou_-|chat_destino|topico_destino_ou_-|intervalo_segundos\n"
-        "/rotina_editar id|nome|chat_origem|topico_origem_ou_-|chat_destino|topico_destino_ou_-|intervalo_segundos\n"
+        "/rotina_criar nome|chat_origem|topico_origem_ou_-|chat_destino|topico_destino_ou_-|intervalo_segundos[|limite_de_posts_ou_-]\n"
+        "/rotina_editar id|nome|chat_origem|topico_origem_ou_-|chat_destino|topico_destino_ou_-|intervalo_segundos[|limite_de_posts_ou_-]\n"
         "/rotinas - listar rotinas\n"
         "/rotina id - ver configuração e último checkpoint\n"
         "/rotina_cursor id|ultimo_id_de_mensagem - definir manualmente o cursor\n"
@@ -127,10 +139,23 @@ async def create_routine(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     except ValueError as exc:
         await update.effective_message.reply_text(str(exc))
         return
-    _, database, _ = _services(context)
-    routine = await database.create_routine(*spec)
+    _, database, scheduler = _services(context)
+    last_message_id = await scheduler.latest_source_message_id(spec[1], spec[2])
+    routine = await database.create_routine(
+        *spec[:6],
+        last_message_id=last_message_id,
+        max_posts_per_run=spec[6],
+    )
+    max_posts_per_run = routine.get("max_posts_per_run")
+    limit_description = (
+        "sem limite"
+        if max_posts_per_run is None
+        else f"limite de {max_posts_per_run} posts por execução"
+    )
     await update.effective_message.reply_text(
-        f"Rotina {routine['id']} criada e pausada. Use /rotina_ativar {routine['id']} para iniciar."
+        f"Rotina {routine['id']} criada e pausada, com cursor na mensagem "
+        f"{last_message_id} e {limit_description}. "
+        f"Use /rotina_ativar {routine['id']} para iniciar."
     )
 
 
@@ -147,7 +172,7 @@ async def edit_routine(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         spec = parse_routine_spec(parts[1])
     except (IndexError, ValueError):
         await update.effective_message.reply_text(
-            "Use: /rotina_editar id|nome|chat_origem|topico_origem_ou_-|chat_destino|topico_destino_ou_-|intervalo_segundos"
+            "Use: /rotina_editar id|nome|chat_origem|topico_origem_ou_-|chat_destino|topico_destino_ou_-|intervalo_segundos[|limite_de_posts_ou_-]"
         )
         return
     _, database, _ = _services(context)
@@ -197,6 +222,7 @@ async def show_routine(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         f"Origem: {routine['source_chat_id']} · tópico {routine['source_topic_id'] or '-'}\n"
         f"Destino: {routine['destination_chat_id']} · tópico {routine['destination_topic_id'] or '-'}\n"
         f"Intervalo: {routine['interval_seconds']}s\n"
+        f"Limite por execução: {routine.get('max_posts_per_run') or 'sem limite'}\n"
         f"Última mensagem verificada: {routine['last_message_id']}\n"
         f"Última execução: {_format_time(routine['last_run_at'])}\n"
         f"Próxima execução: {_format_time(routine['next_run_at'])}"
